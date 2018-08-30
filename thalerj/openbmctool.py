@@ -151,18 +151,20 @@ def loadPolicyTable(pathToPolicyTable):
     """
          loads a json based policy table into a dictionary
            
-         @param value: boolean, the value to convert
-         @return: A string of "Yes" or "No"
+         @param pathToPolicyTable: path to the policy file
+         @return: The policy and device path dictionaries
     """ 
     policyTable = {}
+    pathTable = {}
     if(os.path.exists(pathToPolicyTable)):
         with open(pathToPolicyTable, 'r') as stream:
             try:
                 contents =json.load(stream)
                 policyTable = contents['events']
+                pathTable = contents.get('devicePaths', {})
             except Exception as err:
                 print(err)
-    return policyTable
+    return policyTable, pathTable
 
 
 def boolToString(value):
@@ -684,11 +686,12 @@ def sortSELs(events):
     return [logNumList, eventKeyDict]
 
 
-def parseAlerts(policyTable, selEntries, args):
+def parseAlerts(policyTable, devPathTable, selEntries, args):
     """
          parses alerts in the IBM CER format, using an IBM policy Table
            
          @param policyTable: dictionary, the policy table entries
+         @param devPathTable: dictionary, maps device paths to FRUs
          @param selEntries: dictionary, the alerts retrieved from the bmc
          @return: A dictionary of the parsed entries, in chronological order
     """ 
@@ -725,13 +728,18 @@ def parseAlerts(policyTable, selEntries, args):
                     calloutFound = True
                     fruCallout = str(addDataPiece[calloutIndex]).split('=')[1]
                 if("CALLOUT_DEVICE_PATH" in addDataPiece[i]):
-                    i2creadFail = True
-                    i2cdevice = str(addDataPiece[i]).strip().split('=')[1]
-                    i2cdevice = '/'.join(i2cdevice.split('/')[-4:])
-                    if 'fsi' in str(addDataPiece[calloutIndex]).split('=')[1]:
-                        fruCallout = 'FSI'
+                    path = str(addDataPiece[i]).strip().split('=')[1]
+                    if path in devPathTable:
+                        fruCallout = devPathTable[path]['device']
                     else:
-                        fruCallout = 'I2C'
+                        i2cdevice = str(addDataPiece[i]).strip().split('=')[1]
+                        i2cdevice = '/'.join(i2cdevice.split('/')[-4:])
+                        if 'fsi' in str(addDataPiece[calloutIndex]).split('=')[1]:
+                            fruCallout = 'FSI'
+                        else:
+                            fruCallout = 'I2C'
+
+                    i2creadFail = True
                     calloutFound = True
                 if("CALLOUT_GPIO_NUM" in addDataPiece[i]):
                     if not calloutFound:
@@ -940,7 +948,7 @@ def selPrint(host, args, session):
             ptableLoc = 'lib/policyTable.json'
     else:
         ptableLoc = args.policyTableLoc
-    policyTable = loadPolicyTable(ptableLoc)
+    policyTable, devPathTable = loadPolicyTable(ptableLoc)
     rawselEntries = ""
     if(hasattr(args, 'fileloc') and args.fileloc is not None):
         if os.path.exists(args.fileloc):
@@ -971,7 +979,7 @@ def selPrint(host, args, session):
         
     else:
         if(len(policyTable)>0):
-            events = parseAlerts(policyTable, selEntries, args)
+            events = parseAlerts(policyTable, devPathTable, selEntries, args)
             if(args.json):
                 events["numAlerts"] = len(events)
                 retValue = str(json.dumps(events, sort_keys=True, indent=4, separators=(',', ': '), ensure_ascii=False))
